@@ -6,16 +6,30 @@ const {
     createAudioPlayer,
     createAudioResource,
     AudioPlayerStatus,
+    VoiceConnectionStatus,
     NoSubscriberBehavior
 } = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
+const ffmpegPath = require('ffmpeg-static');
 const express = require('express');
 
-process.on('unhandledRejection', () => {});
-process.on('uncaughtException', () => {});
+process.on('unhandledRejection', (err) => {
+    console.error('[UNHANDLED REJECTION]', err);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[UNCAUGHT EXCEPTION]', err);
+});
 
-// 1. Render / UptimeRobot용 Express 웹 서버
+// 리눅스(Render) 환경에서 ffmpeg 실행 권한 보장
+if (ffmpegPath && process.platform !== 'win32') {
+    execFile('chmod', ['+x', ffmpegPath], (err) => {
+        if (err) console.error('[FFMPEG CHMOD ERR]', err);
+    });
+}
+
+// Render / UptimeRobot용 Express 웹 서버
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -27,7 +41,6 @@ app.listen(PORT, () => {
     console.log(`[SYS] Web server is running and listening on port ${PORT}`);
 });
 
-// 2. 관리자 ID 및 17개 토큰 로드
 const ADMIN_ID = process.env.ADMIN_ID || '1429412320194592811';
 const TOKENS = Array.from({ length: 17 }, (_, i) => process.env[`TOKEN_${i + 1}`]).filter(Boolean);
 
@@ -88,12 +101,21 @@ function startBot(token, index) {
             await sleep(index * 300);
 
             try {
-                joinVoiceChannel({
+                const connection = joinVoiceChannel({
                     channelId: voiceChannel.id,
                     guildId: message.guild.id,
                     adapterCreator: message.guild.voiceAdapterCreator,
                     group: `bot_${index}`
                 });
+
+                connection.on(VoiceConnectionStatus.Ready, () => {
+                    console.log(`🔊 [봇 ${index + 1}] 음성 연결 Ready (${voiceChannel.name})`);
+                });
+
+                connection.on('error', (err) => {
+                    console.error(`❌ [봇 ${index + 1}] 음성 연결 오류:`, err);
+                });
+
                 if (index === 0) {
                     message.reply(`🔊 **${voiceChannel.name}** 채널에 0.3초 간격으로 접속했습니다.`);
                 }
@@ -120,7 +142,7 @@ function startBot(token, index) {
             }
         }
 
-        // !재생 [~.mp3] - 모든 봇 동일 파일 무한 루프
+        // !재생 [~.mp3] - 모든 봇 동일 파일 무한 루프 (0.3초 간격 시작)
         if (command === '재생') {
             const connection = getVoiceConnection(message.guild.id, `bot_${index}`);
             if (!connection) {
@@ -130,7 +152,7 @@ function startBot(token, index) {
 
             const fileName = args[0];
             if (!fileName) {
-                if (index === 0) message.reply('재생할 파일명을 입력해주세요. 예: `!재생 bgm.mp3`');
+                if (index === 0) message.reply('재생할 파일명을 입력해주세요. 예: `!재생 4.mp3`');
                 return;
             }
 
@@ -139,6 +161,8 @@ function startBot(token, index) {
                 if (index === 0) message.reply(`\`${fileName}\` 파일을 찾을 수 없습니다.`);
                 return;
             }
+
+            await sleep(index * 300);
 
             let serverAudio = players.get(message.guild.id);
             if (!serverAudio) {
@@ -154,24 +178,34 @@ function startBot(token, index) {
                     currentFile: filePath
                 };
 
+                player.on(AudioPlayerStatus.Playing, () => {
+                    console.log(`▶️ [봇 ${index + 1}] 재생 중: ${path.basename(serverAudio.currentFile)}`);
+                });
+
                 player.on(AudioPlayerStatus.Idle, () => {
                     if (serverAudio.isLooping) {
-                        const resource = createAudioResource(serverAudio.currentFile);
+                        const resource = createAudioResource(serverAudio.currentFile, {
+                            inlineVolume: true
+                        });
                         player.play(resource);
                     }
                 });
 
                 player.on('error', (error) => {
-                    console.error(`[봇 ${index + 1}] 플레이어 오류:`, error);
+                    console.error(`❌ [봇 ${index + 1}] 플레이어 오류:`, error);
                 });
 
                 connection.subscribe(player);
                 players.set(message.guild.id, serverAudio);
+            } else {
+                connection.subscribe(serverAudio.player);
             }
 
             serverAudio.isLooping = true;
             serverAudio.currentFile = filePath;
-            const resource = createAudioResource(filePath);
+            const resource = createAudioResource(filePath, {
+                inlineVolume: true
+            });
             serverAudio.player.play(resource);
 
             if (index === 0) {
