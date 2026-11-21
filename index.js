@@ -22,14 +22,15 @@ process.on('uncaughtException', (err) => {
     console.error('[UNCAUGHT EXCEPTION]', err);
 });
 
-// 리눅스(Render) 환경에서 ffmpeg 실행 권한 보장
-if (ffmpegPath && process.platform !== 'win32') {
-    execFile('chmod', ['+x', ffmpegPath], (err) => {
-        if (err) console.error('[FFMPEG CHMOD ERR]', err);
-    });
+if (ffmpegPath) {
+    process.env.FFMPEG_PATH = ffmpegPath;
+    if (process.platform !== 'win32') {
+        execFile('chmod', ['+x', ffmpegPath], (err) => {
+            if (err) console.error('[FFMPEG CHMOD ERR]', err);
+        });
+    }
 }
 
-// Render / UptimeRobot용 Express 웹 서버
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -69,10 +70,9 @@ function startBot(token, index) {
         const args = message.content.slice(1).trim().split(/ +/);
         const command = args.shift().toLowerCase();
 
-        // !h - 명령어 목록
+        // !h - 17개 봇 모두 명령어 목록 출력
         if (command === 'h') {
-            if (index !== 0) return;
-
+            await sleep(index * 300);
             const helpMessage =
                 "```\n" +
                 "!vc [음성채널ID] | 음성채널 접속\n" +
@@ -81,20 +81,22 @@ function startBot(token, index) {
                 "!재생중지 | mp3 파일 재생 중지\n" +
                 "!h | 명령어 목록\n" +
                 "```";
-            return message.reply(helpMessage);
+            return message.reply(helpMessage).catch(() => {});
         }
 
-        // !vc [음성채널ID] - 0.3초 간격 순차 접속
+        // !vc [음성채널ID] - 0.3초 간격 순차 접속 + 17개 봇 모두 안내
         if (command === 'vc') {
             const channelId = args[0];
             if (!channelId) {
-                if (index === 0) message.reply('접속할 음성채널 ID를 입력해주세요. 예: `!vc 123456789012345678`');
+                await sleep(index * 300);
+                message.reply('접속할 음성채널 ID를 입력해주세요. 예: `!vc 123456789012345678`').catch(() => {});
                 return;
             }
 
             const voiceChannel = message.guild.channels.cache.get(channelId);
             if (!voiceChannel || voiceChannel.type !== 2) {
-                if (index === 0) message.reply('올바른 음성채널 ID를 입력해주세요.');
+                await sleep(index * 300);
+                message.reply('올바른 음성채널 ID를 입력해주세요.').catch(() => {});
                 return;
             }
 
@@ -116,15 +118,13 @@ function startBot(token, index) {
                     console.error(`❌ [봇 ${index + 1}] 음성 연결 오류:`, err);
                 });
 
-                if (index === 0) {
-                    message.reply(`🔊 **${voiceChannel.name}** 채널에 0.3초 간격으로 접속했습니다.`);
-                }
+                message.reply(`🔊 **${voiceChannel.name}** 채널에 접속했습니다.`).catch(() => {});
             } catch (error) {
                 console.error(`[봇 ${index + 1}] 접속 오류:`, error);
             }
         }
 
-        // !vcs - 음성채널 퇴장
+        // !vcs - 음성채널 퇴장 + 17개 봇 모두 안내
         if (command === 'vcs') {
             const connection = getVoiceConnection(message.guild.id, `bot_${index}`);
             if (!connection) return;
@@ -136,29 +136,31 @@ function startBot(token, index) {
                 players.delete(message.guild.id);
             }
 
+            await sleep(index * 300);
             connection.destroy();
-            if (index === 0) {
-                message.reply('👋 음성채널에서 퇴장했습니다.');
-            }
+            message.reply('👋 음성채널에서 퇴장했습니다.').catch(() => {});
         }
 
-        // !재생 [~.mp3] - 모든 봇 동일 파일 무한 루프 (0.3초 간격 시작)
+        // !재생 [~.mp3] - 모든 봇 동일 파일 무한 루프 + 17개 봇 모두 안내
         if (command === '재생') {
             const connection = getVoiceConnection(message.guild.id, `bot_${index}`);
             if (!connection) {
-                if (index === 0) message.reply('먼저 `!vc [음성채널ID]` 명령어로 봇을 음성채널에 접속시켜주세요.');
+                await sleep(index * 300);
+                message.reply('먼저 `!vc [음성채널ID]` 명령어로 봇을 음성채널에 접속시켜주세요.').catch(() => {});
                 return;
             }
 
             const fileName = args[0];
             if (!fileName) {
-                if (index === 0) message.reply('재생할 파일명을 입력해주세요. 예: `!재생 4.mp3`');
+                await sleep(index * 300);
+                message.reply('재생할 파일명을 입력해주세요. 예: `!재생 4.mp3`').catch(() => {});
                 return;
             }
 
             const filePath = path.join(__dirname, fileName);
             if (!fs.existsSync(filePath)) {
-                if (index === 0) message.reply(`\`${fileName}\` 파일을 찾을 수 없습니다.`);
+                await sleep(index * 300);
+                message.reply(`\`${fileName}\` 파일을 찾을 수 없습니다.`).catch(() => {});
                 return;
             }
 
@@ -208,12 +210,10 @@ function startBot(token, index) {
             });
             serverAudio.player.play(resource);
 
-            if (index === 0) {
-                message.reply(`🔁 **${fileName}** 파일을 모든 봇이 반복 재생합니다.`);
-            }
+            message.reply(`🔁 **${fileName}** 파일을 반복 재생합니다.`).catch(() => {});
         }
 
-        // !재생중지 - 재생 중지
+        // !재생중지 - 재생 중지 + 17개 봇 모두 안내
         if (command === '재생중지') {
             const serverAudio = players.get(message.guild.id);
             if (!serverAudio) return;
@@ -221,9 +221,8 @@ function startBot(token, index) {
             serverAudio.isLooping = false;
             serverAudio.player.stop();
 
-            if (index === 0) {
-                message.reply('⏹️ 재생을 중지했습니다.');
-            }
+            await sleep(index * 300);
+            message.reply('⏹️ 재생을 중지했습니다.').catch(() => {});
         }
     });
 
