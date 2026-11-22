@@ -7,6 +7,7 @@ const {
     createAudioResource,
     AudioPlayerStatus,
     VoiceConnectionStatus,
+    entersState,
     NoSubscriberBehavior
 } = require('@discordjs/voice');
 const fs = require('fs');
@@ -25,9 +26,7 @@ process.on('uncaughtException', (err) => {
 if (ffmpegPath) {
     process.env.FFMPEG_PATH = ffmpegPath;
     if (process.platform !== 'win32') {
-        execFile('chmod', ['+x', ffmpegPath], (err) => {
-            if (err) console.error('[FFMPEG CHMOD ERR]', err);
-        });
+        execFile('chmod', ['+x', ffmpegPath], () => {});
     }
 }
 
@@ -67,7 +66,7 @@ function startBot(token, index) {
         if (message.author.bot || !message.content.startsWith('!')) return;
         if (message.author.id !== ADMIN_ID) return;
 
-        const args = message.content.slice(1).trim().split(/ +/);
+        const args = message.content.slice(1).trim().split(/\s+/);
         const command = args.shift().toLowerCase();
 
         // !h - 17개 봇 모두 명령어 목록 출력
@@ -84,7 +83,7 @@ function startBot(token, index) {
             return message.reply(helpMessage).catch(() => {});
         }
 
-        // !vc [음성채널ID] - 0.3초 간격 순차 접속 + 17개 봇 모두 안내
+        // !vc [음성채널ID] - 0.3초 간격 순차 접속 (마이크/헤드셋 음소거 해제)
         if (command === 'vc') {
             const channelId = args[0];
             if (!channelId) {
@@ -107,24 +106,35 @@ function startBot(token, index) {
                     channelId: voiceChannel.id,
                     guildId: message.guild.id,
                     adapterCreator: message.guild.voiceAdapterCreator,
-                    group: `bot_${index}`
+                    group: `bot_${index}`,
+                    selfMute: false,
+                    selfDeaf: false
                 });
 
-                connection.on(VoiceConnectionStatus.Ready, () => {
-                    console.log(`🔊 [봇 ${index + 1}] 음성 연결 Ready (${voiceChannel.name})`);
+                connection.on(VoiceConnectionStatus.Disconnected, async () => {
+                    try {
+                        await Promise.race([
+                            entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+                            entersState(connection, VoiceConnectionStatus.Connecting, 5000)
+                        ]);
+                    } catch {
+                        connection.destroy();
+                    }
                 });
 
                 connection.on('error', (err) => {
-                    console.error(`❌ [봇 ${index + 1}] 음성 연결 오류:`, err);
+                    console.error(`❌ [봇 ${index + 1}] 음성 연결 오류:`, err.message);
                 });
 
+                await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+                console.log(`🔊 [봇 ${index + 1}] ${voiceChannel.name} Ready`);
                 message.reply(`🔊 **${voiceChannel.name}** 채널에 접속했습니다.`).catch(() => {});
             } catch (error) {
-                console.error(`[봇 ${index + 1}] 접속 오류:`, error);
+                console.error(`❌ [봇 ${index + 1}] 접속 오류:`, error.message);
             }
         }
 
-        // !vcs - 음성채널 퇴장 + 17개 봇 모두 안내
+        // !vcs - 음성채널 퇴장
         if (command === 'vcs') {
             const connection = getVoiceConnection(message.guild.id, `bot_${index}`);
             if (!connection) return;
@@ -141,7 +151,7 @@ function startBot(token, index) {
             message.reply('👋 음성채널에서 퇴장했습니다.').catch(() => {});
         }
 
-        // !재생 [~.mp3] - 모든 봇 동일 파일 무한 루프 + 17개 봇 모두 안내
+        // !재생 [~.mp3] - 모든 봇 동일 파일 무한 루프
         if (command === '재생') {
             const connection = getVoiceConnection(message.guild.id, `bot_${index}`);
             if (!connection) {
@@ -166,54 +176,54 @@ function startBot(token, index) {
 
             await sleep(index * 300);
 
-            let serverAudio = players.get(message.guild.id);
-            if (!serverAudio) {
-                const player = createAudioPlayer({
-                    behaviors: {
-                        noSubscriber: NoSubscriberBehavior.Play
-                    }
-                });
+            try {
+                if (connection.state.status !== VoiceConnectionStatus.Ready) {
+                    await entersState(connection, VoiceConnectionStatus.Ready, 10000);
+                }
 
-                serverAudio = {
-                    player,
-                    isLooping: true,
-                    currentFile: filePath
-                };
+                let serverAudio = players.get(message.guild.id);
+                if (!serverAudio) {
+                    const player = createAudioPlayer({
+                        behaviors: {
+                            noSubscriber: NoSubscriberBehavior.Play
+                        }
+                    });
 
-                player.on(AudioPlayerStatus.Playing, () => {
-                    console.log(`▶️ [봇 ${index + 1}] 재생 중: ${path.basename(serverAudio.currentFile)}`);
-                });
+                    serverAudio = {
+                        player,
+                        isLooping: true,
+                        currentFile: filePath
+                    };
 
-                player.on(AudioPlayerStatus.Idle, () => {
-                    if (serverAudio.isLooping) {
-                        const resource = createAudioResource(serverAudio.currentFile, {
-                            inlineVolume: true
-                        });
-                        player.play(resource);
-                    }
-                });
+                    player.on(AudioPlayerStatus.Playing, () => {
+                        console.log(`▶️ [봇 ${index + 1}] 재생 중: ${fileName}`);
+                    });
 
-                player.on('error', (error) => {
-                    console.error(`❌ [봇 ${index + 1}] 플레이어 오류:`, error);
-                });
+                    player.on(AudioPlayerStatus.Idle, () => {
+                        if (serverAudio.isLooping) {
+                            player.play(createAudioResource(serverAudio.currentFile));
+                        }
+                    });
 
-                connection.subscribe(player);
-                players.set(message.guild.id, serverAudio);
-            } else {
+                    player.on('error', (error) => {
+                        console.error(`❌ [봇 ${index + 1}] 플레이어 오류:`, error.message);
+                    });
+
+                    players.set(message.guild.id, serverAudio);
+                }
+
+                serverAudio.isLooping = true;
+                serverAudio.currentFile = filePath;
                 connection.subscribe(serverAudio.player);
+                serverAudio.player.play(createAudioResource(filePath));
+
+                message.reply(`🔁 **${fileName}** 파일을 반복 재생합니다.`).catch(() => {});
+            } catch (error) {
+                console.error(`❌ [봇 ${index + 1}] 재생 시작 실패:`, error.message);
             }
-
-            serverAudio.isLooping = true;
-            serverAudio.currentFile = filePath;
-            const resource = createAudioResource(filePath, {
-                inlineVolume: true
-            });
-            serverAudio.player.play(resource);
-
-            message.reply(`🔁 **${fileName}** 파일을 반복 재생합니다.`).catch(() => {});
         }
 
-        // !재생중지 - 재생 중지 + 17개 봇 모두 안내
+        // !재생중지 - 재생 중지
         if (command === '재생중지') {
             const serverAudio = players.get(message.guild.id);
             if (!serverAudio) return;
